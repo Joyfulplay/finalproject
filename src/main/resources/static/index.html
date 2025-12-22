@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Stack Overflow Analysis Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        :root { --sidebar-width: 260px; --primary: #2c3e50; --accent: #3498db; --bg: #f4f7f6; }
+        body { font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; height: 100vh; background: var(--bg); }
+
+        /* Sidebar */
+        .sidebar { width: var(--sidebar-width); background: var(--primary); color: white; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 30px 20px; text-align: center; border-bottom: 1px solid #3e4f5f; }
+        .nav-item { padding: 18px 25px; cursor: pointer; transition: 0.3s; display: flex; align-items: center; }
+        .nav-item:hover { background: #34495e; }
+        .nav-item.active { background: var(--accent); border-left: 6px solid #fff; }
+        .nav-item i { margin-right: 15px; width: 20px; }
+
+        /* Main Content */
+        .main-content { flex: 1; overflow-y: auto; padding: 40px; }
+        .view-section { display: none; }
+        .view-section.active { display: block; animation: fadeIn 0.4s; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Header with Select */
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .metric-picker { padding: 8px 12px; border-radius: 6px; border: 1px solid #ccc; font-family: inherit; cursor: pointer; }
+
+        /* Grid and Cards */
+        .chart-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); gap: 30px; }
+        .card { background: white; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.08); padding: 25px; display: flex; flex-direction: column; }
+        .card h4 { margin: 0 0 20px 0; color: #555; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+
+        .chart-container { width: 100%; height: 500px; min-height: 500px; }
+        .insight-box { background: #eef7fe; border-left: 5px solid var(--accent); padding: 20px; border-radius: 4px; margin-top: 30px; line-height: 1.6; }
+    </style>
+</head>
+<body>
+
+<div class="sidebar">
+    <div class="sidebar-header"><h3>Data Dashboard</h3><p>CS209A Final Project</p></div>
+    <div class="nav-item active" onclick="switchView('view-trends', this)"><i class="fas fa-chart-line"></i> Topic Trends</div>
+    <div class="nav-item" onclick="switchView('view-co', this)"><i class="fas fa-project-diagram"></i> Co-occurrence</div>
+    <div class="nav-item" onclick="switchView('view-pitfalls', this)"><i class="fas fa-bug"></i> Thread Pitfalls</div>
+    <div class="nav-item" onclick="switchView('view-solvability', this)"><i class="fas fa-check-circle"></i> Solvability</div>
+</div>
+
+<div class="main-content">
+    <!-- Section 1: Topic Trends -->
+    <div id="view-trends" class="view-section active">
+        <div class="section-header">
+            <h2>Topic Trends Analysis</h2>
+            <div>
+                <label style="font-weight: bold; margin-right: 8px;">Metric:</label>
+                <select id="metricSelector" class="metric-picker" onchange="updateTrendCharts()">
+                    <option value="count">Question Count</option>
+                    <option value="total_views">Total Views</option>
+                    <option value="total_score">Total Score</option>
+                    <option value="total_answers">Total Answers</option>
+                </select>
+            </div>
+        </div>
+        <div class="chart-grid">
+            <div class="card"><h4 id="trendLineTitle">Monthly Activity Trend</h4><div id="trendLine" class="chart-container"></div></div>
+            <div class="card"><h4 id="trendBarTitle">Total Volume per Topic</h4><div id="trendBar" class="chart-container"></div></div>
+        </div>
+        <div class="insight-box"><strong>Insight:</strong> Switching between 'Question Count' and 'Total Views' reveals if a topic is widely asked about or just highly "spectated" by others.</div>
+    </div>
+
+    <!-- Section 2: Co-occurrence -->
+    <div id="view-co" class="view-section">
+        <h2>Tag Co-occurrence</h2>
+        <div class="chart-grid">
+            <div class="card"><h4>Top Tag Pairs</h4><div id="coBar" class="chart-container"></div></div>
+            <div class="card"><h4>Relationship Graph</h4><div id="coGraph" class="chart-container"></div></div>
+        </div>
+        <div class="insight-box"><strong>Insight:</strong> Strong clusters (e.g., Spring-Boot with Security) indicate typical technology stacks used in production.</div>
+    </div>
+
+    <!-- Section 3: Pitfalls -->
+    <div id="view-pitfalls" class="view-section">
+        <h2>Multithreading Pitfalls</h2>
+        <div class="chart-grid">
+            <div class="card"><h4>Problem Share</h4><div id="pitfallPie" class="chart-container"></div></div>
+            <div class="card"><h4>Severity View (Rose)</h4><div id="pitfallRose" class="chart-container"></div></div>
+        </div>
+        <div class="insight-box"><strong>Insight:</strong> 'Deadlock' is often the most frequently mentioned specific error in multithreading threads.</div>
+    </div>
+
+    <!-- Section 4: Solvability -->
+    <div id="view-solvability" class="view-section">
+        <h2>Solvability Factors</h2>
+        <div class="chart-grid">
+            <div class="card"><h4>Feature Comparison (Radar)</h4><div id="solvabilityRadar" class="chart-container"></div></div>
+            <div class="card"><h4>Metrics Grouped Bar</h4><div id="solvabilityBar" class="chart-container"></div></div>
+        </div>
+        <div class="insight-box"><strong>Insight:</strong> Solvable questions usually come from users with higher reputations, hinting at better-formed questions.</div>
+    </div>
+</div>
+
+<script>
+    function switchView(viewId, el) {
+        document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
+        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+        document.getElementById(viewId).classList.add('active');
+        el.classList.add('active');
+        window.dispatchEvent(new Event('resize'));
+    }
+
+    // --- 1. Trends Logic ---
+    let trendRawData = [];
+
+    async function loadTrends() {
+        const res = await axios.get('/api/trends');
+        trendRawData = res.data;
+        updateTrendCharts();
+    }
+
+    function updateTrendCharts() {
+        const metric = document.getElementById('metricSelector').value;
+        const metricName = document.getElementById('metricSelector').options[document.getElementById('metricSelector').selectedIndex].text;
+
+        // Update Titles
+        document.getElementById('trendLineTitle').innerText = `Monthly Trend (${metricName})`;
+        document.getElementById('trendBarTitle').innerText = `Total Volume (${metricName})`;
+
+        const months = [...new Set(trendRawData.map(d => d.month))].sort();
+        const tags = [...new Set(trendRawData.map(d => d.tag))];
+
+        // Line Chart
+        const line = echarts.getInstanceByDom(document.getElementById('trendLine')) || echarts.init(document.getElementById('trendLine'));
+        line.setOption({
+            tooltip: {trigger: 'axis'}, legend: {bottom: 0},
+            xAxis: {type: 'category', data: months}, yAxis: {type: 'value'},
+            series: tags.map(t => ({
+                name: t, type: 'line', smooth: true,
+                data: months.map(m => {
+                    const found = trendRawData.find(d => d.tag === t && d.month === m);
+                    return found ? parseFloat(found[metric]) : 0;
+                })
+            }))
+        }, true);
+
+        // Bar Chart
+        const bar = echarts.getInstanceByDom(document.getElementById('trendBar')) || echarts.init(document.getElementById('trendBar'));
+        const agg = tags.map(t => ({
+            name: t,
+            value: trendRawData.filter(d => d.tag === t).reduce((sum, curr) => sum + parseFloat(curr[metric] || 0), 0)
+        })).sort((a,b) => b.value - a.value);
+
+        bar.setOption({
+            tooltip: {trigger: 'item'},
+            xAxis: {type: 'category', data: agg.map(i => i.name), axisLabel: {interval: 0, rotate: 30}},
+            yAxis: {type: 'value'},
+            series: [{type: 'bar', data: agg.map(i => i.value), itemStyle: {color: '#3498db'}, label: {show: true, position: 'top'}}]
+        }, true);
+    }
+
+    // --- 2. Co-occurrence ---
+    async function loadCo() {
+        const res = await axios.get('/api/co-occurrence');
+        const bar = echarts.init(document.getElementById('coBar'));
+        bar.setOption({
+            tooltip: {}, xAxis: {type: 'value'},
+            yAxis: {type: 'category', data: res.data.map(d => d.tag1+'+'+d.tag2).reverse()},
+            series: [{type: 'bar', data: res.data.map(d=>d.weight).reverse(), itemStyle: {color: '#1abc9c'}}]
+        });
+
+        const graph = echarts.init(document.getElementById('coGraph'));
+        const nodes = Array.from(new Set(res.data.flatMap(d => [d.tag1, d.tag2]))).map(n => ({name: n, symbolSize: 15}));
+        graph.setOption({
+            series: [{type: 'graph', layout: 'force', data: nodes, links: res.data.map(d=>({source: d.tag1, target: d.tag2, value: d.weight})), roam: true, label: {show: true}, force: {repulsion: 200}}]
+        });
+    }
+
+    // --- 3. Pitfalls ---
+    async function loadPitfalls() {
+        const res = await axios.get('/api/pitfalls');
+        const pie = echarts.init(document.getElementById('pitfallPie'));
+        pie.setOption({ tooltip: {trigger: 'item'}, series: [{type: 'pie', radius: '60%', data: res.data}] });
+
+        const rose = echarts.init(document.getElementById('pitfallRose'));
+        rose.setOption({ series: [{type: 'pie', radius: [30, 150], roseType: 'area', data: res.data}] });
+    }
+
+    // --- 4. Solvability (Fixed Radar Size) ---
+    async function loadSolvability() {
+        const res = await axios.get('/api/solvability');
+        const s = res.data.find(d => d.status === 'Solvable');
+        const h = res.data.find(d => d.status === 'Hard-to-Solve');
+
+        const radar = echarts.init(document.getElementById('solvabilityRadar'));
+        radar.setOption({
+            legend: { bottom: 10, data: ['Solvable', 'Hard-to-Solve'] },
+            tooltip: { trigger: 'item' },
+            radar: {
+                center: ['50%', '50%'],
+                radius: '45%', // 修改点：缩小半径，给文字留空间
+                indicator: [
+                    { name: 'Reputation', max: 5000 },
+                    { name: 'Body Length', max: 2000 },
+                    { name: 'Code Snippet %', max: 100 }
+                ],
+                axisName: { color: '#666', borderRadius: 3, padding: [3, 5] }
+            },
+            series: [{
+                type: 'radar',
+                data: [
+                    { value: [s.avg_reputation, s.avg_body_length, s.code_snippet_ratio], name: 'Solvable', areaStyle: {color: 'rgba(52,152,219,0.3)'} },
+                    { value: [h.avg_reputation, h.avg_body_length, h.code_snippet_ratio], name: 'Hard-to-Solve', areaStyle: {color: 'rgba(46,204,113,0.3)'} }
+                ]
+            }]
+        });
+
+        const bar = echarts.init(document.getElementById('solvabilityBar'));
+        bar.setOption({
+            legend: {}, tooltip: {trigger: 'axis'},
+            xAxis: {type: 'category', data: ['Reputation/10', 'Body/10', 'Code %']},
+            yAxis: {type: 'value'},
+            series: [
+                { name: 'Solvable', type: 'bar', data: [s.avg_reputation/10, s.avg_body_length/10, s.code_snippet_ratio] },
+                { name: 'Hard-to-Solve', type: 'bar', data: [h.avg_reputation/10, h.avg_body_length/10, h.code_snippet_ratio] }
+            ]
+        });
+    }
+
+    window.onload = () => { loadTrends(); loadCo(); loadPitfalls(); loadSolvability(); };
+    window.onresize = () => { document.querySelectorAll('.chart-container').forEach(el => echarts.getInstanceByDom(el)?.resize()); };
+</script>
+</body>
+</html>
