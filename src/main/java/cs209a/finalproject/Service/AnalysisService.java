@@ -71,15 +71,26 @@ public class AnalysisService {
     // 4. Solvability: 比较可解与难解问题的特征指标
     public List<Map<String, Object>> getSolvabilityComparison() {
         String sql = """
-            SELECT 
-                (CASE WHEN accepted_answer_id IS NOT NULL THEN 'Solvable' ELSE 'Hard-to-Solve' END) as status,
-                AVG(u.reputation) as avg_reputation,
-                AVG(LENGTH(q.body)) as avg_body_length,
-                SUM(CASE WHEN q.body LIKE '%<code>%' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as code_snippet_ratio
-            FROM questions q 
-            JOIN users u ON q.owner_user_id = u.user_id 
-            GROUP BY status
-            """;
+        SELECT 
+            -- 1. 定义分类：是否有采纳回答
+            (CASE WHEN q.accepted_answer_id IS NOT NULL THEN 'Solvable' ELSE 'Hard-to-Solve' END) as status,
+            
+            -- 维度 A: 用户特征 (User Reputation)
+            ROUND(AVG(u.reputation), 2) as avg_owner_reputation,
+            
+            -- 维度 B: 内容丰富度 (Body Length & Code Snippets)
+            ROUND(AVG(LENGTH(q.body)), 0) as avg_body_length,
+            ROUND(SUM(CASE WHEN q.body LIKE '%<code>%' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as code_snippet_ratio,
+            
+            -- 维度 C: 互动与复杂度 (Comments & Tags)
+            ROUND(AVG(q.answer_count), 2) as avg_answer_count,
+            ROUND(AVG((SELECT COUNT(*) FROM comments c WHERE c.post_id = q.question_id AND c.post_type = 'Q')), 2) as avg_comment_count,
+            ROUND(AVG((SELECT COUNT(*) FROM question_tags qt WHERE qt.question_id = q.question_id)), 2) as avg_tag_count
+            
+        FROM questions q 
+        JOIN users u ON q.owner_user_id = u.user_id 
+        GROUP BY status
+        """;
         return jdbcTemplate.queryForList(sql);
     }
 }

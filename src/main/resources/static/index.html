@@ -48,7 +48,6 @@
 </div>
 
 <div class="main-content">
-    <!-- Section 1: Topic Trends -->
     <div id="view-trends" class="view-section active">
         <div class="section-header">
             <h2>Topic Trends Analysis</h2>
@@ -66,37 +65,32 @@
             <div class="card"><h4 id="trendLineTitle">Monthly Activity Trend</h4><div id="trendLine" class="chart-container"></div></div>
             <div class="card"><h4 id="trendBarTitle">Total Volume per Topic</h4><div id="trendBar" class="chart-container"></div></div>
         </div>
-        <div class="insight-box"><strong>Insight:</strong> Switching between 'Question Count' and 'Total Views' reveals if a topic is widely asked about or just highly "spectated" by others.</div>
+        <div class="insight-box"><strong>Insight:</strong> Trends are filtered to exclude the universal 'java' tag for better focus on specific sub-topics.</div>
     </div>
 
-    <!-- Section 2: Co-occurrence -->
     <div id="view-co" class="view-section">
         <h2>Tag Co-occurrence</h2>
         <div class="chart-grid">
             <div class="card"><h4>Top Tag Pairs</h4><div id="coBar" class="chart-container"></div></div>
             <div class="card"><h4>Relationship Graph</h4><div id="coGraph" class="chart-container"></div></div>
         </div>
-        <div class="insight-box"><strong>Insight:</strong> Strong clusters (e.g., Spring-Boot with Security) indicate typical technology stacks used in production.</div>
     </div>
 
-    <!-- Section 3: Pitfalls -->
     <div id="view-pitfalls" class="view-section">
         <h2>Multithreading Pitfalls</h2>
         <div class="chart-grid">
             <div class="card"><h4>Problem Share</h4><div id="pitfallPie" class="chart-container"></div></div>
             <div class="card"><h4>Severity View (Rose)</h4><div id="pitfallRose" class="chart-container"></div></div>
         </div>
-        <div class="insight-box"><strong>Insight:</strong> 'Deadlock' is often the most frequently mentioned specific error in multithreading threads.</div>
     </div>
 
-    <!-- Section 4: Solvability -->
     <div id="view-solvability" class="view-section">
         <h2>Solvability Factors</h2>
         <div class="chart-grid">
             <div class="card"><h4>Feature Comparison (Radar)</h4><div id="solvabilityRadar" class="chart-container"></div></div>
             <div class="card"><h4>Metrics Grouped Bar</h4><div id="solvabilityBar" class="chart-container"></div></div>
         </div>
-        <div class="insight-box"><strong>Insight:</strong> Solvable questions usually come from users with higher reputations, hinting at better-formed questions.</div>
+        <div class="insight-box"><strong>Insight:</strong> Hard-to-solve questions often show lower user reputation but, interestingly, might have higher comment counts as the community seeks clarification.</div>
     </div>
 </div>
 
@@ -109,12 +103,13 @@
         window.dispatchEvent(new Event('resize'));
     }
 
-    // --- 1. Trends Logic ---
+    // --- 1. Trends Logic (Modified to filter 'java') ---
     let trendRawData = [];
 
     async function loadTrends() {
         const res = await axios.get('/api/trends');
-        trendRawData = res.data;
+        // 过滤掉所有 tag 为 'java' 的数据点
+        trendRawData = res.data.filter(d => d.tag.toLowerCase() !== 'java');
         updateTrendCharts();
     }
 
@@ -122,17 +117,15 @@
         const metric = document.getElementById('metricSelector').value;
         const metricName = document.getElementById('metricSelector').options[document.getElementById('metricSelector').selectedIndex].text;
 
-        // Update Titles
         document.getElementById('trendLineTitle').innerText = `Monthly Trend (${metricName})`;
         document.getElementById('trendBarTitle').innerText = `Total Volume (${metricName})`;
 
         const months = [...new Set(trendRawData.map(d => d.month))].sort();
         const tags = [...new Set(trendRawData.map(d => d.tag))];
 
-        // Line Chart
         const line = echarts.getInstanceByDom(document.getElementById('trendLine')) || echarts.init(document.getElementById('trendLine'));
         line.setOption({
-            tooltip: {trigger: 'axis'}, legend: {bottom: 0},
+            tooltip: {trigger: 'axis'}, legend: {bottom: 0, type: 'scroll'},
             xAxis: {type: 'category', data: months}, yAxis: {type: 'value'},
             series: tags.map(t => ({
                 name: t, type: 'line', smooth: true,
@@ -143,7 +136,6 @@
             }))
         }, true);
 
-        // Bar Chart
         const bar = echarts.getInstanceByDom(document.getElementById('trendBar')) || echarts.init(document.getElementById('trendBar'));
         const agg = tags.map(t => ({
             name: t,
@@ -180,12 +172,11 @@
         const res = await axios.get('/api/pitfalls');
         const pie = echarts.init(document.getElementById('pitfallPie'));
         pie.setOption({ tooltip: {trigger: 'item'}, series: [{type: 'pie', radius: '60%', data: res.data}] });
-
         const rose = echarts.init(document.getElementById('pitfallRose'));
         rose.setOption({ series: [{type: 'pie', radius: [30, 150], roseType: 'area', data: res.data}] });
     }
 
-    // --- 4. Solvability (Fixed Radar Size) ---
+    // --- 4. Solvability (Modified for new Back-end Metrics) ---
     async function loadSolvability() {
         const res = await axios.get('/api/solvability');
         const s = res.data.find(d => d.status === 'Solvable');
@@ -193,35 +184,48 @@
 
         const radar = echarts.init(document.getElementById('solvabilityRadar'));
         radar.setOption({
-            legend: { bottom: 10, data: ['Solvable', 'Hard-to-Solve'] },
+            legend: { bottom: 0, data: ['Solvable', 'Hard-to-Solve'] },
             tooltip: { trigger: 'item' },
             radar: {
-                center: ['50%', '50%'],
-                radius: '45%', // 修改点：缩小半径，给文字留空间
+                center: ['50%', '45%'],
+                radius: '60%',
                 indicator: [
-                    { name: 'Reputation', max: 5000 },
+                    { name: 'Owner Reputation', max: 5000 },
                     { name: 'Body Length', max: 2000 },
-                    { name: 'Code Snippet %', max: 100 }
-                ],
-                axisName: { color: '#666', borderRadius: 3, padding: [3, 5] }
+                    { name: 'Code Snippet %', max: 100 },
+                    { name: 'Comments Count', max: 10 },
+                    { name: 'Tag Count', max: 5 }
+                ]
             },
             series: [{
                 type: 'radar',
                 data: [
-                    { value: [s.avg_reputation, s.avg_body_length, s.code_snippet_ratio], name: 'Solvable', areaStyle: {color: 'rgba(52,152,219,0.3)'} },
-                    { value: [h.avg_reputation, h.avg_body_length, h.code_snippet_ratio], name: 'Hard-to-Solve', areaStyle: {color: 'rgba(46,204,113,0.3)'} }
+                    {
+                        value: [s.avg_owner_reputation, s.avg_body_length, s.code_snippet_ratio, s.avg_comment_count, s.avg_tag_count],
+                        name: 'Solvable', areaStyle: {color: 'rgba(52,152,219,0.3)'}
+                    },
+                    {
+                        value: [h.avg_owner_reputation, h.avg_body_length, h.code_snippet_ratio, h.avg_comment_count, h.avg_tag_count],
+                        name: 'Hard-to-Solve', areaStyle: {color: 'rgba(46,204,113,0.3)'}
+                    }
                 ]
             }]
         });
 
         const bar = echarts.init(document.getElementById('solvabilityBar'));
         bar.setOption({
-            legend: {}, tooltip: {trigger: 'axis'},
-            xAxis: {type: 'category', data: ['Reputation/10', 'Body/10', 'Code %']},
+            legend: { top: 10 }, tooltip: {trigger: 'axis'},
+            xAxis: {type: 'category', data: ['Reputation/100', 'Body/100', 'Code %', 'Comments*10', 'Tags*10']},
             yAxis: {type: 'value'},
             series: [
-                { name: 'Solvable', type: 'bar', data: [s.avg_reputation/10, s.avg_body_length/10, s.code_snippet_ratio] },
-                { name: 'Hard-to-Solve', type: 'bar', data: [h.avg_reputation/10, h.avg_body_length/10, h.code_snippet_ratio] }
+                {
+                    name: 'Solvable', type: 'bar',
+                    data: [s.avg_owner_reputation/100, s.avg_body_length/100, s.code_snippet_ratio, s.avg_comment_count*10, s.avg_tag_count*10]
+                },
+                {
+                    name: 'Hard-to-Solve', type: 'bar',
+                    data: [h.avg_owner_reputation/100, h.avg_body_length/100, h.code_snippet_ratio, h.avg_comment_count*10, h.avg_tag_count*10]
+                }
             ]
         });
     }
