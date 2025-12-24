@@ -11,5 +11,7 @@ import java.util.Map;
 public class PitfallController {
     @Autowired private AnalysisService service;
     @GetMapping
-    public List<Map<String, Object>> getPitfalls() { return service.getMultithreadingPitfalls(); }
+    public List<Map<String, Object>> getPitfalls() {
+        return service.getMultithreadingPitfalls();
+    }
 }

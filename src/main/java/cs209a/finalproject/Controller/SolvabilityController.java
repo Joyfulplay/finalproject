@@ -12,5 +12,7 @@ import java.util.Map;
 public class SolvabilityController {
     @Autowired private AnalysisService service;
     @GetMapping
-    public List<Map<String, Object>> getSolvability() { return service.getSolvabilityComparison(); }
+    public List<Map<String, Object>> getSolvability() {
+        return service.getSolvabilityComparison();
+    }
 }

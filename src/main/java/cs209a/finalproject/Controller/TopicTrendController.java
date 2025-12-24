@@ -2,13 +2,8 @@ package cs209a.finalproject.Controller;
 
 import cs209a.finalproject.Service.AnalysisService;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.web.bind.annotation.CrossOrigin;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
+
 import java.util.List;
 import java.util.Map;
 
@@ -17,6 +12,18 @@ import java.util.Map;
 @CrossOrigin
 public class TopicTrendController {
     @Autowired private AnalysisService service;
+
     @GetMapping
-    public List<Map<String, Object>> getTrends() { return service.getTopicTrends(); }
+    public List<Map<String, Object>> getTrends(
+            @RequestParam(defaultValue = "2022-01-01") String startDate,
+            @RequestParam(defaultValue = "2025-12-31") String endDate,
+            @RequestParam(defaultValue = "spring,hibernate,maven,lambda,stream") List<String> tags) {
+        return service.getTopicTrends(startDate, endDate, tags);
+    }
+
+    // 辅助接口：给前端下拉框获取所有可用标签
+    @GetMapping("/tags")
+    public List<Map<String, Object>> getAvailableTags() {
+        return service.getTagList(50, true, true);
+    }
 }
