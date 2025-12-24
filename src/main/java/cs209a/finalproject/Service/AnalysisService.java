@@ -46,23 +46,23 @@ public class AnalysisService {
 
         // ========== 4. 动态构建SQL ==========
         String sql = String.format("""
-        SELECT 
-            to_char(to_timestamp(q.creation_date), 'YYYY-MM') AS month, 
-            qt.tag, 
+        SELECT
+            to_char(to_timestamp(q.creation_date), 'YYYY-MM') AS month,
+            qt.tag,
             count(*) AS question_count,                -- 问题发布量
             sum(q.view_count) AS total_views,          -- 总浏览量（关注度）
             sum(q.score) AS total_score,               -- 总得分（认可度）
             sum(q.answer_count) AS total_answers,      -- 总回答数（互动度）
             -- 已回答问题占比
             ROUND(SUM(CASE WHEN q.is_answered = TRUE THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) AS answered_ratio
-        FROM questions q 
-        JOIN question_tags qt ON q.question_id = qt.question_id 
+        FROM questions q
+        JOIN question_tags qt ON q.question_id = qt.question_id
         -- 动态标签过滤（参数化）
-        WHERE qt.tag IN (%s) 
+        WHERE qt.tag IN (%s)
           -- 时间范围：[startDate 00:00:00, endDate 23:59:59] 的秒级时间戳
           AND q.creation_date >= EXTRACT(EPOCH FROM TO_DATE(?, 'YYYY-MM-DD'))
           AND q.creation_date <= EXTRACT(EPOCH FROM (TO_DATE(?, 'YYYY-MM-DD') + INTERVAL '1 DAY' - INTERVAL '1 SECOND'))
-        GROUP BY month, qt.tag 
+        GROUP BY month, qt.tag
         ORDER BY month ASC, qt.tag ASC
         """, tagPlaceholders);
 
@@ -75,7 +75,30 @@ public class AnalysisService {
         }
     }
 
-    // 2. Co-occurrence: Top N 标签共现对
+    // 2. Co-occurrence: Top N Java标签共现对（排除java标签）
+    public List<Map<String, Object>> getCoOccurrence(int n) {
+        // 核心优化：排除java标签、限定核心标签范围、避免无效共现
+        String sql = """
+            SELECT
+                t1.tag as tag1,
+                t2.tag as tag2,
+                count(DISTINCT t1.question_id) as co_occurrence_count  -- 改用distinct避免重复计数
+            FROM question_tags t1
+            JOIN question_tags t2 ON t1.question_id = t2.question_id
+            WHERE
+                t1.tag < t2.tag  -- 避免A-B和B-A重复
+                -- 排除java标签，仅分析核心Java主题
+                AND t1.tag != 'java'
+                AND t2.tag != 'java'
+            GROUP BY tag1, tag2
+            ORDER BY co_occurrence_count DESC
+            LIMIT ?
+            """;
+        return jdbcTemplate.queryForList(sql, n);
+    }
+
+    // 3. Multithreading Pitfalls: 分析多线程核心陷阱（基于内容+正则，不止标签）
+
     // 停用词列表（过滤无意义词汇）
     private static final Set<String> STOP_WORDS = new HashSet<>(Arrays.asList(
             "the", "a", "an", "is", "are", "was", "were", "i", "you", "he", "she", "it",
@@ -105,7 +128,7 @@ public class AnalysisService {
     private List<Map.Entry<String, Long>> getHighFreqKeywords(int topN, int minOccurrence) {
         // PostgreSQL 文本处理：拆分标题+内容为单词，过滤停用词，统计词频
         String sql = """
-            SELECT 
+            SELECT
                 lower(word) AS keyword,
                 count(DISTINCT q.question_id) AS occurrence_count
             FROM (
@@ -121,10 +144,10 @@ public class AnalysisService {
                 JOIN question_tags qt ON q.question_id = qt.question_id
                 WHERE qt.tag IN ('multithreading', 'concurrency')
             ) AS word_table
-            WHERE 
+            WHERE
                 -- 过滤空字符串、短单词（长度<3）、停用词
-                word != '' 
-                AND length(word) >= 3 
+                word != ''
+                AND length(word) >= 3
                 AND lower(word) NOT IN (%s)
             GROUP BY keyword
             -- 过滤出现频次过低的关键词（避免噪音）
@@ -200,10 +223,10 @@ public class AnalysisService {
                 // 对每个手动关键词，单独查询实际出现次数（避免遗漏）
                 for (String ruleKeyword : ruleKeywords) {
                     String sql = """
-                        SELECT count(DISTINCT q.question_id) 
-                        FROM questions q 
-                        JOIN question_tags qt ON q.question_id = qt.question_id 
-                        WHERE 
+                        SELECT count(DISTINCT q.question_id)
+                        FROM questions q
+                        JOIN question_tags qt ON q.question_id = qt.question_id
+                        WHERE
                             qt.tag IN ('multithreading', 'concurrency')
                             AND (q.title ~* ? OR q.body ~* ?)
                         """;
@@ -225,7 +248,7 @@ public class AnalysisService {
                     // 显式创建HashMap<String, Object>，避免泛型推断冲突
                     Map<String, Object> resultMap = new HashMap<>();
                     resultMap.put("pitfall_name", entry.getKey());
-                    resultMap.put("occurrence_count", (Object) entry.getValue()); // 显式转Object
+                    resultMap.put("occurrence_count", entry.getValue()); // 显式转Object
                     resultMap.put("relevance", entry.getValue() > minOccurrence ? "High" : "Low"); // 标注相关性
                     return resultMap;
                 })
@@ -241,47 +264,47 @@ public class AnalysisService {
     // 4. Solvability: 比较可解与难解问题的特征指标
     public List<Map<String, Object>> getSolvabilityComparison() {
         String sql = """
-        SELECT 
+        SELECT
             -- 多维度定义问题分类
-            CASE 
-                WHEN q.accepted_answer_id IS NOT NULL 
-                     AND q.is_answered = TRUE 
-                     AND q.answer_count >= 1 
+            CASE
+                WHEN q.accepted_answer_id IS NOT NULL
+                     AND q.is_answered = TRUE
+                     AND q.answer_count >= 1
                      THEN 'Solvable'  -- 可解决：有采纳答案+已回答+至少1个回答
-                WHEN q.accepted_answer_id IS NULL 
-                     AND q.answer_count = 0 
-                     AND EXTRACT(DAY FROM NOW() - to_timestamp(q.creation_date)) > 30 
+                WHEN q.accepted_answer_id IS NULL
+                     AND q.answer_count = 0
+                     AND EXTRACT(DAY FROM NOW() - to_timestamp(q.creation_date)) > 30
                      THEN 'Hard-to-Solve'  -- 难解：无采纳+无回答+发布超30天
                 ELSE 'Other'  -- 排除中间状态
             END as status,
-            
+        
             -- 特征1：用户特征 - 提问者平均声望
             ROUND(AVG(u.reputation), 2) as avg_owner_reputation,
-            
+        
             -- 特征2：内容特征 - 问题长度+代码片段占比（内容丰富度）
             ROUND(AVG(LENGTH(q.body)), 0) as avg_body_length,
             ROUND(SUM(CASE WHEN q.body LIKE '%<code>%' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as code_snippet_ratio,
-            
+        
             -- 特征3：互动特征 - 平均回答数+平均得分
             ROUND(AVG(q.answer_count), 2) as avg_answer_count,
             ROUND(AVG(q.score), 2) as avg_score,
-            
+        
             -- 特征4：复杂度特征 - 平均标签数（标签越多越复杂）+ 平均浏览量
             ROUND(AVG((SELECT COUNT(*) FROM question_tags qt WHERE qt.question_id = q.question_id)), 2) as avg_tag_count,
             ROUND(AVG(q.view_count), 2) as avg_view_count,
-            
+        
             -- 特征5：复杂主题占比（多线程/反射等复杂标签）
             ROUND(SUM(CASE WHEN EXISTS (
-                SELECT 1 FROM question_tags qt 
-                WHERE qt.question_id = q.question_id 
+                SELECT 1 FROM question_tags qt
+                WHERE qt.question_id = q.question_id
                 AND qt.tag IN ('multithreading', 'reflection', 'spring-boot')
             ) THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as complex_topic_ratio,
-            
+        
             -- 样本量
             COUNT(*) as total_questions
-            
-        FROM questions q 
-        JOIN users u ON q.owner_user_id = u.user_id 
+        
+        FROM questions q
+        JOIN users u ON q.owner_user_id = u.user_id
         -- 仅分析可解/难解两类
         WHERE status IN ('Solvable', 'Hard-to-Solve')
         GROUP BY status
