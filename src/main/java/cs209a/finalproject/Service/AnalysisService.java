@@ -112,11 +112,10 @@ public class AnalysisService {
             "case", "default", "long", "short", "byte", "char", "boolean", "double", "float", "package"
     ));
 
-    // 扩展多线程陷阱规则：覆盖所有核心陷阱类型，支持复合关键词匹配
     private static final Map<String, List<String>> PITFALL_RULES = new HashMap<>();
     static {
         PITFALL_RULES.put("Deadlock", Arrays.asList("deadlock", "deadlocks", "livelock"));
-        PITFALL_RULES.put("Race Condition", Arrays.asList("race condition", "race conditions", "racecondition"));
+        PITFALL_RULES.put("Race Condition", Arrays.asList("race"));
         PITFALL_RULES.put("ConcurrentModificationException", Arrays.asList("concurrentmodificationexception"));
         PITFALL_RULES.put("IllegalMonitorStateException", Arrays.asList("illegalmonitorstateexception"));
         PITFALL_RULES.put("Volatile Misuse", Arrays.asList("volatile", "visibility", "memory visibility"));
@@ -138,8 +137,7 @@ public class AnalysisService {
 
         // 1. 拆分正则改为[^a-zA-Z-]+，保留连字符（如race-condition）
         // 2. 处理HTML转义字符（&#39;）
-        // 3. 扩大标签范围（加入java），确保数据量
-        // 4. 优化子查询别名引用，避免SQL语法错误
+        // 3. 优化子查询别名引用，避免SQL语法错误
         String sql = """
             SELECT
                 lower(word) AS keyword,
@@ -326,7 +324,6 @@ public class AnalysisService {
                      AND qcl.answer_count >= 1
                      THEN 'Solvable'
                 WHEN qcl.accepted_answer_id IS NULL
-                     AND qcl.answer_count = 0
                      AND EXTRACT(DAY FROM NOW() - to_timestamp(qcl.creation_date)) > 30
                      THEN 'Hard-to-Solve'
                 ELSE 'Other'
