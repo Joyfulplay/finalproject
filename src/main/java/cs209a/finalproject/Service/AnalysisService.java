@@ -288,4 +288,76 @@ public class AnalysisService {
         """;
         return jdbcTemplate.queryForList(sql);
     }
+
+    /**
+     * 获取问题标签列表（去重），支持过滤条件
+     * @param minOccurrence 标签最小出现次数（过滤低频标签，默认1）
+     * @param excludeJava 是否排除 java 标签（默认true，符合题目要求）
+     * @param orderByCount 是否按出现次数降序排序（默认true）
+     * @return 标签列表（含标签名、出现次数）
+     */
+    public List<Map<String, Object>> getTagList(
+            Integer minOccurrence,
+            Boolean excludeJava,
+            Boolean orderByCount) {
+        // 1. 参数默认值处理
+        int finalMinOccurrence = (minOccurrence == null || minOccurrence < 1) ? 1 : minOccurrence;
+        boolean finalExcludeJava = excludeJava == null || excludeJava;
+        boolean finalOrderByCount = orderByCount == null || orderByCount;
+
+        // 2. 构建 SQL
+        StringBuilder sqlBuilder = new StringBuilder();
+        sqlBuilder.append("""
+            SELECT
+                qt.tag,
+                count(DISTINCT qt.question_id) AS occurrence_count
+            FROM question_tags qt
+            WHERE 1=1
+            """);
+
+        // 动态添加过滤条件：排除 java 标签
+        List<Object> params = new ArrayList<>();
+        if (finalExcludeJava) {
+            sqlBuilder.append(" AND qt.tag != ? ");
+            params.add("java");
+        }
+
+        // 分组 + 过滤低频标签 + 排序
+        sqlBuilder.append("""
+            GROUP BY qt.tag
+            HAVING count(DISTINCT qt.question_id) >= ?
+            """);
+        params.add(finalMinOccurrence);
+
+        if (finalOrderByCount) {
+            sqlBuilder.append(" ORDER BY occurrence_count DESC ");
+        } else {
+            sqlBuilder.append(" ORDER BY qt.tag ASC "); // 否则按标签名升序
+        }
+
+        // 3. 执行查询
+        List<Map<String, Object>> rawResult = jdbcTemplate.queryForList(sqlBuilder.toString(), params.toArray());
+
+        // 4. 格式化返回结果（确保泛型为 <String, Object>）
+        return rawResult.stream()
+                .map(item -> {
+                    Map<String, Object> tagMap = new HashMap<>();
+                    tagMap.put("tag", item.get("tag"));
+                    tagMap.put("occurrence_count", item.get("occurrence_count"));
+                    // 可选：添加标签热度等级（方便前端展示）
+                    long count = (Long) item.get("occurrence_count");
+                    String hotLevel = count >= 1000 ? "Hot" : (count >= 100 ? "Medium" : "Low");
+                    tagMap.put("hot_level", hotLevel);
+                    return tagMap;
+                })
+                .collect(Collectors.toList());
+    }
+
+    // ========== 重载方法：无参数调用（使用默认值） ==========
+    /**
+     * 无参数获取 Tag 列表（使用默认值：排除java、按频次降序、最小出现次数1）
+     */
+    public List<Map<String, Object>> getTagList() {
+        return getTagList(null, null, null);
+    }
 }
