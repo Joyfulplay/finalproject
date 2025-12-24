@@ -1,5 +1,7 @@
 package cs209a.finalproject.Service;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -14,12 +16,13 @@ import java.util.stream.Collectors;
 @Service
 public class AnalysisService {
 
+    private static final Logger log = LoggerFactory.getLogger(AnalysisService.class);
+
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
     // 1. Topic Trends: 过去3年指定标签的月度提问量趋势
     public List<Map<String, Object>> getTopicTrends(String startDate, String endDate, List<String> tags) {
-        // ========== 1. 参数合法性校验 ==========
         if (CollectionUtils.isEmpty(tags)) {
             throw new IllegalArgumentException("分析标签列表不能为空，请至少指定一个标签");
         }
@@ -30,16 +33,12 @@ public class AnalysisService {
             throw new IllegalArgumentException("时间格式错误，请使用 yyyy-MM-dd 格式（例如：2022-01-01）", e);
         }
 
-        // ========== 2. 动态生成标签IN子句的占位符 ==========
         String tagPlaceholders = String.join(", ", tags.stream().map(tag -> "?").toArray(String[]::new));
-
-        // ========== 3. 构建参数数组 ==========
         List<Object> params = new ArrayList<>();
-        params.addAll(tags); // 第一步：标签参数（对应IN中的?）
-        params.add(startDate); // 第二步：开始时间（对应第一个TO_DATE的?）
-        params.add(endDate); // 第三步：结束时间（对应第二个TO_DATE的?）
+        params.addAll(tags);
+        params.add(startDate);
+        params.add(endDate);
 
-        // ========== 4. 动态构建SQL ==========
         String sql = String.format("""
         SELECT
             to_char(to_timestamp(q.creation_date), 'YYYY-MM') AS month,
@@ -58,16 +57,19 @@ public class AnalysisService {
         ORDER BY month ASC, qt.tag ASC
         """, tagPlaceholders);
 
-        // ========== 5. 执行查询 ==========
         try {
             return jdbcTemplate.queryForList(sql, params.toArray());
         } catch (EmptyResultDataAccessException e) {
+            log.warn("TopicTrends查询无结果，参数：tags={}, startDate={}, endDate={}", tags, startDate, endDate);
             return new ArrayList<>();
         }
     }
 
     // 2. Co-occurrence: Top N Java标签共现对（排除java标签）
     public List<Map<String, Object>> getCoOccurrence(int n) {
+        if (n <= 0) {
+            throw new IllegalArgumentException("Top N必须大于0");
+        }
         String sql = """
             SELECT
                 t1.tag as tag1,
@@ -83,69 +85,115 @@ public class AnalysisService {
             ORDER BY co_occurrence_count DESC
             LIMIT ?
             """;
-        return jdbcTemplate.queryForList(sql, n);
+        try {
+            return jdbcTemplate.queryForList(sql, n);
+        } catch (EmptyResultDataAccessException e) {
+            log.warn("CoOccurrence查询无结果，参数：n={}", n);
+            return new ArrayList<>();
+        }
     }
 
     // 3. Multithreading Pitfalls: 分析多线程核心陷阱
+    // 扩展停用词列表：包含通用无意义词、Java语法关键字、高频无效编程词汇
     private static final Set<String> STOP_WORDS = new HashSet<>(Arrays.asList(
+            // 基础停用词
             "the", "a", "an", "is", "are", "was", "were", "i", "you", "he", "she", "it",
             "we", "they", "in", "on", "at", "for", "with", "of", "to", "and", "or", "but",
             "how", "why", "what", "when", "where", "which", "who", "this", "that", "these", "those",
             "my", "your", "his", "her", "our", "their", "can", "could", "will", "would", "should",
-            "java", "thread", "multithreading", "concurrency", "problem", "error", "issue", "bug"
+            // 通用编程无效词
+            "java", "thread", "multithreading", "concurrency", "problem", "error", "issue", "bug",
+            // 高频无效词（从实际数据中提取）
+            "new", "quot", "not", "have", "public", "class", "from", "void", "string", "there", "get",
+            "code", "return", "out", "try", "system", "private", "any", "run", "while", "int", "one",
+            "catch", "all", "println", "using", "use", "time", "after", "true", "want", "static",
+            "start", "only", "add", "null", "way", "like", "call", "has", "method", "other", "some",
+            "object", "does", "final", "need", "if", "else", "println", "break", "continue", "switch",
+            "case", "default", "long", "short", "byte", "char", "boolean", "double", "float", "package"
     ));
 
+    // 扩展多线程陷阱规则：覆盖所有核心陷阱类型，支持复合关键词匹配
     private static final Map<String, List<String>> PITFALL_RULES = new HashMap<>();
     static {
-        PITFALL_RULES.put("Deadlock", Arrays.asList("deadlock", "deadlocks"));
-        PITFALL_RULES.put("Race Condition", Arrays.asList("race condition", "race conditions"));
+        PITFALL_RULES.put("Deadlock", Arrays.asList("deadlock", "deadlocks", "livelock"));
+        PITFALL_RULES.put("Race Condition", Arrays.asList("race condition", "race conditions", "racecondition"));
         PITFALL_RULES.put("ConcurrentModificationException", Arrays.asList("concurrentmodificationexception"));
         PITFALL_RULES.put("IllegalMonitorStateException", Arrays.asList("illegalmonitorstateexception"));
-        PITFALL_RULES.put("Volatile Misuse", Arrays.asList("volatile"));
-        PITFALL_RULES.put("Synchronization Issue", Arrays.asList("synchronized", "synchronization"));
+        PITFALL_RULES.put("Volatile Misuse", Arrays.asList("volatile", "visibility", "memory visibility"));
+        PITFALL_RULES.put("Synchronization Issue", Arrays.asList("synchronized", "synchronization", "lock", "locks"));
         PITFALL_RULES.put("Thread Pool Error", Arrays.asList("thread pool", "threadpool", "executorservice", "threadpoolexecutor"));
-        PITFALL_RULES.put("Thread Starvation", Arrays.asList("starvation", "starve"));
-        PITFALL_RULES.put("Memory Visibility", Arrays.asList("memory visibility", "visibility issue"));
-        PITFALL_RULES.put("InterruptedException", Arrays.asList("interruptedexception", "thread interrupt"));
+        PITFALL_RULES.put("Thread Starvation", Arrays.asList("starvation", "starve", "hungry"));
+        PITFALL_RULES.put("InterruptedException", Arrays.asList("interruptedexception", "interrupt", "interrupted"));
+        PITFALL_RULES.put("Virtual Thread Pinning", Arrays.asList("virtual thread", "virtual threads", "pinning"));
+        PITFALL_RULES.put("Thread Blocking/Waiting", Arrays.asList("blocked", "waiting", "timed_waiting", "stuck", "hang"));
+        PITFALL_RULES.put("Atomicity Issue", Arrays.asList("atomic", "atomicity", "non-atomic"));
+        PITFALL_RULES.put("Spurious Wakeup", Arrays.asList("spurious", "wakeup", "spurious wakeup"));
     }
 
-    // ========== 步骤1：自动挖掘多线程问题的高频候选关键词 ==========
+    // ========== 步骤1：自动挖掘多线程问题的高频候选关键词（核心修复） ==========
     private List<Map.Entry<String, Long>> getHighFreqKeywords(int topN, int minOccurrence) {
+        if (topN <= 0 || minOccurrence < 0) {
+            throw new IllegalArgumentException("topN必须>0，minOccurrence必须>=0");
+        }
+
+        // 核心优化：
+        // 1. 拆分正则改为[^a-zA-Z-]+，保留连字符（如race-condition）
+        // 2. 处理HTML转义字符（&#39;）
+        // 3. 扩大标签范围（加入java），确保数据量
+        // 4. 优化子查询别名引用，避免SQL语法错误
         String sql = """
             SELECT
                 lower(word) AS keyword,
-                count(DISTINCT q.question_id) AS occurrence_count
+                count(DISTINCT word_table.question_id) AS occurrence_count
             FROM (
-                -- 拆分标题为单词
-                SELECT q.question_id, regexp_split_to_table(q.title, '\\\\W+') AS word
+                -- Split title with HTML escape handling
+                SELECT 
+                    q.question_id, 
+                    regexp_split_to_table(
+                        regexp_replace(q.title, '&#39;', '''', 'g'),
+                        '[^a-zA-Z-]+'  -- 仅拆分非字母/非连字符，保留复合关键词
+                    ) AS word
                 FROM questions q
                 JOIN question_tags qt ON q.question_id = qt.question_id
-                WHERE qt.tag IN ('multithreading', 'concurrency')
+                WHERE qt.tag IN ('multithreading', 'concurrency', 'java')
                 UNION ALL
-                -- 拆分内容为单词（排除HTML标签）
-                SELECT q.question_id, regexp_split_to_table(regexp_replace(q.body, '<.*?>', ' ', 'g'), '\\\\W+') AS word
+                -- Split body with HTML tag/escape handling
+                SELECT 
+                    q.question_id, 
+                    regexp_split_to_table(
+                        regexp_replace(regexp_replace(q.body, '<.*?>', ' ', 'g'), '&#39;', '''', 'g'),
+                        '[^a-zA-Z-]+'
+                    ) AS word
                 FROM questions q
                 JOIN question_tags qt ON q.question_id = qt.question_id
-                WHERE qt.tag IN ('multithreading', 'concurrency')
+                WHERE qt.tag IN ('multithreading', 'concurrency', 'java')
             ) AS word_table
             WHERE
                 word != ''
                 AND length(word) >= 3
                 AND lower(word) NOT IN (%s)
             GROUP BY keyword
-            HAVING count(DISTINCT q.question_id) >= ?
+            HAVING count(DISTINCT word_table.question_id) >= ?
             ORDER BY occurrence_count DESC
             LIMIT ?
             """;
 
         String stopWordPlaceholders = String.join(", ", STOP_WORDS.stream().map(w -> "?").toArray(String[]::new));
         String finalSql = String.format(sql, stopWordPlaceholders);
+        log.debug("高频关键词查询SQL：{}", finalSql);
 
         List<Object> params = new ArrayList<>(STOP_WORDS);
         params.add(minOccurrence);
         params.add(topN);
+        log.debug("高频关键词查询参数：{}", params);
 
-        List<Map<String, Object>> rawResult = jdbcTemplate.queryForList(finalSql, params.toArray());
+        List<Map<String, Object>> rawResult;
+        try {
+            rawResult = jdbcTemplate.queryForList(finalSql, params.toArray());
+        } catch (EmptyResultDataAccessException e) {
+            log.warn("高频关键词查询无结果，参数：topN={}, minOccurrence={}", topN, minOccurrence);
+            rawResult = new ArrayList<>();
+        }
 
         return rawResult.stream()
                 .map(item -> new AbstractMap.SimpleEntry<>(
@@ -157,35 +205,47 @@ public class AnalysisService {
 
     // ========== 步骤2：结合高频词+规则映射，生成多线程陷阱分析结果 ==========
     public List<Map<String, Object>> getMultithreadingPitfalls() {
+        // 调整默认参数：降低阈值以适配测试数据，开启手动补充提升结果覆盖度
         int topN = 50;
-        int minOccurrence = 5;
-        boolean includeManual = false;
+        int minOccurrence = 1;  // 测试阶段降低阈值，生产可改回5
+        boolean includeManual = true;
 
         List<Map.Entry<String, Long>> highFreqKeywords = getHighFreqKeywords(topN, minOccurrence);
+        log.debug("挖掘到的高频关键词数量：{}", highFreqKeywords.size());
 
         Map<String, Long> pitfallCountMap = new HashMap<>();
         PITFALL_RULES.keySet().forEach(pitfall -> pitfallCountMap.put(pitfall, 0L));
 
-        // 匹配高频词到陷阱类型
+        // 优化匹配逻辑：支持复合关键词（如"race condition"拆分为单个词匹配）
         for (Map.Entry<String, Long> keywordEntry : highFreqKeywords) {
-            String keyword = keywordEntry.getKey();
+            String keyword = keywordEntry.getKey().trim().toLowerCase();
             long count = keywordEntry.getValue();
 
             for (Map.Entry<String, List<String>> ruleEntry : PITFALL_RULES.entrySet()) {
                 String pitfall = ruleEntry.getKey();
                 List<String> ruleKeywords = ruleEntry.getValue();
 
-                boolean isMatch = ruleKeywords.stream()
-                        .anyMatch(ruleWord -> keyword.contains(ruleWord) || ruleWord.contains(keyword));
+                // 匹配逻辑：关键词包含规则词，或规则词（复合）包含关键词
+                boolean isMatch = ruleKeywords.stream().anyMatch(ruleWord -> {
+                    String ruleWordLower = ruleWord.toLowerCase();
+                    // 处理复合规则词（如"race condition"）
+                    if (ruleWordLower.contains(" ")) {
+                        String[] ruleParts = ruleWordLower.split(" ");
+                        return Arrays.stream(ruleParts).allMatch(keyword::contains);
+                    } else {
+                        return keyword.contains(ruleWordLower) || ruleWordLower.contains(keyword);
+                    }
+                });
 
                 if (isMatch) {
                     pitfallCountMap.put(pitfall, pitfallCountMap.get(pitfall) + count);
+                    log.debug("匹配到陷阱：{}，关键词：{}，计数+{}", pitfall, keyword, count);
                     break;
                 }
             }
         }
 
-        // 补充手动配置的陷阱
+        // 手动补充：通过正则匹配复合关键词（如"race condition"），提升结果准确性
         if (includeManual) {
             for (Map.Entry<String, List<String>> ruleEntry : PITFALL_RULES.entrySet()) {
                 String pitfall = ruleEntry.getKey();
@@ -197,24 +257,26 @@ public class AnalysisService {
                         FROM questions q
                         JOIN question_tags qt ON q.question_id = qt.question_id
                         WHERE
-                            qt.tag IN ('multithreading', 'concurrency')
+                            qt.tag IN ('multithreading', 'concurrency', 'java')
                             AND (q.title ~* ? OR q.body ~* ?)
                         """;
                     Long manualCount;
                     try {
                         manualCount = jdbcTemplate.queryForObject(sql, Long.class, ruleKeyword, ruleKeyword);
+                        manualCount = manualCount == null ? 0L : manualCount;
                     } catch (EmptyResultDataAccessException e) {
                         manualCount = 0L;
                     }
 
                     if (manualCount > pitfallCountMap.get(pitfall)) {
                         pitfallCountMap.put(pitfall, manualCount);
+                        log.debug("手动补充陷阱计数：{}，计数={}", pitfall, manualCount);
                     }
                 }
             }
         }
 
-        // 转换返回格式
+        // 转换结果并排序，过滤无数据的陷阱
         return pitfallCountMap.entrySet().stream()
                 .filter(entry -> entry.getValue() > 0)
                 .map(entry -> {
@@ -272,7 +334,12 @@ public class AnalysisService {
         WHERE status IN ('Solvable', 'Hard-to-Solve')
         GROUP BY status
         """;
-        return jdbcTemplate.queryForList(sql);
+        try {
+            return jdbcTemplate.queryForList(sql);
+        } catch (EmptyResultDataAccessException e) {
+            log.warn("SolvabilityComparison查询无结果");
+            return new ArrayList<>();
+        }
     }
 
     /**
@@ -313,7 +380,13 @@ public class AnalysisService {
             sqlBuilder.append(" ORDER BY qt.tag ASC ");
         }
 
-        List<Map<String, Object>> rawResult = jdbcTemplate.queryForList(sqlBuilder.toString(), params.toArray());
+        List<Map<String, Object>> rawResult;
+        try {
+            rawResult = jdbcTemplate.queryForList(sqlBuilder.toString(), params.toArray());
+        } catch (EmptyResultDataAccessException e) {
+            log.warn("TagList查询无结果，参数：minOccurrence={}, excludeJava={}", finalMinOccurrence, finalExcludeJava);
+            rawResult = new ArrayList<>();
+        }
 
         return rawResult.stream()
                 .map(item -> {
