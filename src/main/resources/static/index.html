@@ -52,24 +52,33 @@
 <div class="main-content">
 
     <!-- 1. Topic Trends View -->
+    <!-- 1. Topic Trends View -->
     <div id="view-trends" class="view-section active">
         <div class="toolbar">
             <input type="date" id="startDate" value="2022-01-01">
             <span>to</span>
-            <input type="date" id="endDate" value="2024-12-31">
-            <input type="text" id="tagInput" placeholder="spring,hibernate,lambda" style="width: 250px;">
+            <input type="date" id="endDate" value="2025-12-31">
+
+            <!-- 更新了 placeholder -->
+            <input type="text" id="tagInput"
+                   placeholder="e.g. generics,lambda,spring-boot"
+                   style="width: 300px;">
+
+            <!-- 新增快捷预设按钮 -->
+            <button onclick="setJavaPresets()" style="background: #2ecc71;">
+                <i class="fas fa-tags"></i> Java Core
+            </button>
+
             <select id="trendMetric">
                 <option value="question_count">Question Count</option>
                 <option value="total_views">Total Views</option>
                 <option value="total_score">Total Score</option>
-                <option value="answered_ratio">Answered Ratio (%)</option>
             </select>
             <button onclick="loadTrends()"><i class="fas fa-sync"></i> Analyze</button>
         </div>
         <div class="card-grid">
             <div class="card full-width"><h3>Monthly Evolution</h3><div id="trendLine" class="chart-container"></div></div>
-            <div class="card"><h3>Total Impact by Topic</h3><div id="trendBar" class="chart-container"></div></div>
-            <div class="card"><h3>Answered Ratio Comparison</h3><div id="trendPie" class="chart-container"></div></div>
+            <div class="card full-width"><h3>Total Impact by Topic</h3><div id="trendBar" class="chart-container"></div></div>
         </div>
     </div>
 
@@ -87,11 +96,29 @@
     </div>
 
     <!-- 3. Pitfalls View -->
+    <!-- 3. Pitfalls View -->
     <div id="view-pitfalls" class="view-section">
+        <div class="toolbar">
+            <span style="color: #666; font-size: 0.9rem;">
+                <i class="fas fa-info-circle"></i>
+                Analysis of common concurrency issues based on keyword frequency in Java questions.
+                <span style="color: #e74c3c; margin-left:10px;">■ High Relevance</span>
+                <span style="color: #f39c12; margin-left:10px;">■ Low Relevance</span>
+            </span>
+        </div>
         <div class="card-grid">
-            <div class="card full-width"><h3>Multithreading Pitfall Distribution</h3><div id="pitfallBar" class="chart-container"></div></div>
-            <div class="card"><h3>Pitfall Proportion</h3><div id="pitfallPie" class="chart-container"></div></div>
-            <div class="card"><h3>Relevance Level</h3><div id="pitfallRose" class="chart-container"></div></div>
+            <div class="card full-width">
+                <h3>Multithreading Pitfall Distribution (Keyword Extraction)</h3>
+                <div id="pitfallBar" class="chart-container"></div>
+            </div>
+            <div class="card">
+                <h3>Impact Share</h3>
+                <div id="pitfallPie" class="chart-container"></div>
+            </div>
+            <div class="card">
+                <h3>Intensity Analysis (Nightingale Rose)</h3>
+                <div id="pitfallRose" class="chart-container"></div>
+            </div>
         </div>
     </div>
 
@@ -99,8 +126,8 @@
     <div id="view-solvability" class="view-section">
         <div class="card-grid">
             <div class="card full-width"><h3>Feature Comparison: Solvable vs Hard-to-Solve</h3><div id="solvRadar" class="chart-container"></div></div>
-            <div class="card"><h3>Activity Metrics</h3><div id="solvActivityBar" class="chart-container"></div></div>
-            <div class="card"><h3>Complexity & Code Ratio</h3><div id="solvCodeBar" class="chart-container"></div></div>
+            <!-- Activity Metrics Removed -->
+            <div class="card full-width"><h3>Complexity & Code Ratio</h3><div id="solvCodeBar" class="chart-container"></div></div>
         </div>
     </div>
 </div>
@@ -116,44 +143,112 @@
     }
 
     // --- 1. Trends ---
+    // 定义常量：符合 Stack Overflow 规范的标签名
+    const JAVA_CORE_TAGS = 'generics,collections,io,lambda,multithreading,sockets,reflection,spring-boot';
+
+    // 快捷填充标签函数
+    function setJavaPresets() {
+        document.getElementById('tagInput').value = JAVA_CORE_TAGS;
+        loadTrends(); // 填充后自动触发查询
+    }
+
+    // --- 1. Trends ---
     async function loadTrends() {
+        // 获取输入值，如果没有输入则默认使用你指定的 Java 核心技术栈
+        let tagValue = document.getElementById('tagInput').value;
+        if (!tagValue) {
+            tagValue = JAVA_CORE_TAGS;
+            document.getElementById('tagInput').value = JAVA_CORE_TAGS;
+        }
+
         const params = {
             startDate: document.getElementById('startDate').value,
             endDate: document.getElementById('endDate').value,
-            tags: document.getElementById('tagInput').value || 'spring,hibernate,maven,lambda,stream'
+            // 将输入的逗号分隔字符串转为后端需要的列表格式
+            tags: tagValue.split(',').map(t => t.trim().toLowerCase())
         };
+
         const metric = document.getElementById('trendMetric').value;
-        const res = await axios.get('/api/trends', { params });
-        const data = res.data;
 
-        const months = [...new Set(data.map(d => d.month))].sort();
-        const tags = [...new Set(data.map(d => d.tag))];
+        try {
+            // 注意：axios 传递数组参数时，后端用 List<String> 接收
+            // 默认 axios 会序列化为 tags[]=...，Spring 需要处理。
+            // 这里使用更兼容的写法
+            const res = await axios.get('/api/trends', {
+                params: params,
+                paramsSerializer: params => {
+                    const searchParams = new URLSearchParams();
+                    searchParams.append('startDate', params.startDate);
+                    searchParams.append('endDate', params.endDate);
+                    // 关键：将数组转换为多个同名参数，如 ?tags=lambda&tags=generics
+                    params.tags.forEach(tag => searchParams.append('tags', tag));
+                    return searchParams.toString();
+                }
+            });
 
-        const line = echarts.init(document.getElementById('trendLine'));
-        line.setOption({
-            tooltip: { trigger: 'axis' },
-            legend: { data: tags, bottom: 0 },
-            xAxis: { type: 'category', data: months },
-            yAxis: { type: 'value' },
-            series: tags.map(t => ({
-                name: t, type: 'line', smooth: true,
-                data: months.map(m => {
-                    const found = data.find(d => d.tag === t && d.month === m);
-                    return found ? found[metric] : 0;
-                })
-            }))
-        });
+            const data = res.data;
+            if (!data || data.length === 0) {
+                alert("No data found for the selected tags and date range.");
+                return;
+            }
 
-        const bar = echarts.init(document.getElementById('trendBar'));
-        const aggData = tags.map(t => ({
-            name: t,
-            value: data.filter(d => d.tag === t).reduce((s, c) => s + Number(c[metric]), 0).toFixed(2)
-        })).sort((a,b) => b.value - a.value);
-        bar.setOption({
-            xAxis: { type: 'category', data: aggData.map(i => i.name) },
-            yAxis: { type: 'value' },
-            series: [{ type: 'bar', data: aggData.map(i => i.value), itemStyle: {color: '#4776e6'} }]
-        });
+            const months = [...new Set(data.map(d => d.month))].sort();
+            const tagsInData = [...new Set(data.map(d => d.tag))];
+
+            // --- 折线图 (Line Chart) ---
+            const line = echarts.init(document.getElementById('trendLine'));
+            line.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'cross' }
+                },
+                legend: { data: tagsInData, bottom: 0, type: 'scroll' },
+                grid: { bottom: 80, left: 50, right: 50 },
+                xAxis: { type: 'category', data: months },
+                yAxis: { type: 'value', name: metric.replace('_', ' ') },
+                series: tagsInData.map(t => ({
+                    name: t,
+                    type: 'line',
+                    smooth: true,
+                    symbol: 'circle',
+                    data: months.map(m => {
+                        const found = data.find(d => d.tag === t && d.month === m);
+                        return found ? found[metric] : 0;
+                    })
+                }))
+            }, true); // true 表示重绘
+
+            // --- 柱状图 (Bar Chart) ---
+            const bar = echarts.init(document.getElementById('trendBar'));
+            const aggData = tagsInData.map(t => ({
+                name: t,
+                value: data.filter(d => d.tag === t).reduce((s, c) => s + Number(c[metric]), 0)
+            })).sort((a,b) => b.value - a.value);
+
+            bar.setOption({
+                tooltip: { trigger: 'item' },
+                xAxis: {
+                    type: 'category',
+                    data: aggData.map(i => i.name),
+                    axisLabel: { rotate: 30 }
+                },
+                yAxis: { type: 'value' },
+                series: [{
+                    type: 'bar',
+                    data: aggData.map(i => i.value),
+                    itemStyle: {
+                        color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+                            { offset: 0, color: '#83bff6' },
+                            { offset: 0.5, color: '#188df0' },
+                            { offset: 1, color: '#188df0' }
+                        ])
+                    }
+                }]
+            }, true);
+        } catch (error) {
+            console.error("Trend Analysis Error:", error);
+            alert("Analysis failed. Please check the console for details.");
+        }
     }
 
     // --- 2. Co-occurrence ---
@@ -183,43 +278,124 @@
     }
 
     // --- 3. Pitfalls ---
+    // --- 3. Pitfalls ---
     async function loadPitfalls() {
-        const res = await axios.get('/api/pitfalls');
-        const data = res.data.map(d => ({ name: d.pitfall_name, value: d.occurrence_count }));
+        try {
+            const res = await axios.get('/api/pitfalls');
+            const data = res.data; // 包含 pitfall_name, occurrence_count, relevance
 
-        echarts.init(document.getElementById('pitfallBar')).setOption({
-            xAxis: { type: 'category', data: data.map(d => d.name) },
-            yAxis: { type: 'value' },
-            series: [{ type: 'bar', data: data.map(d => d.value), itemStyle: {color: '#ff6b6b'} }]
-        });
-        echarts.init(document.getElementById('pitfallPie')).setOption({
-            series: [{ type: 'pie', data: data, radius: '50%' }]
-        });
+            // 1. 柱状图：展示数量分布，并根据关联度(relevance)着色
+            const bar = echarts.init(document.getElementById('pitfallBar'));
+            bar.setOption({
+                tooltip: { trigger: 'axis' },
+                grid: { bottom: '25%' }, // 预留底部空间给旋转的标签
+                xAxis: {
+                    type: 'category',
+                    data: data.map(d => d.pitfall_name),
+                    axisLabel: { interval: 0, rotate: 35 } // 旋转35度防止长单词重叠
+                },
+                yAxis: { type: 'value', name: 'Occurrences' },
+                series: [{
+                    name: 'Mention Count',
+                    type: 'bar',
+                    data: data.map(d => ({
+                        value: d.occurrence_count,
+                        // High 为深红色，Low 为淡橙色
+                        itemStyle: { color: d.relevance === 'High' ? '#e74c3c' : '#f39c12' }
+                    })),
+                    label: { show: true, position: 'top' }
+                }]
+            });
+
+            // 2. 环形图：展示各陷阱占比
+            const pie = echarts.init(document.getElementById('pitfallPie'));
+            pie.setOption({
+                tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                legend: { orient: 'vertical', left: 'left', textStyle: { fontSize: 10 } },
+                series: [{
+                    type: 'pie',
+                    radius: ['40%', '70%'],
+                    avoidLabelOverlap: true,
+                    itemStyle: { borderRadius: 8, borderColor: '#fff', borderWidth: 2 },
+                    label: { show: false },
+                    data: data.map(d => ({ name: d.pitfall_name, value: d.occurrence_count }))
+                }]
+            });
+
+            // 3. 南丁格尔玫瑰图：展示重要程度
+            const rose = echarts.init(document.getElementById('pitfallRose'));
+            rose.setOption({
+                tooltip: { trigger: 'item' },
+                visualMap: {
+                    show: false,
+                    min: 0,
+                    max: Math.max(...data.map(d => d.occurrence_count)),
+                    inRange: { colorLightness: [0.4, 0.8] }
+                },
+                series: [{
+                    name: 'Pitfall Intensity',
+                    type: 'pie',
+                    radius: [20, 140],
+                    center: ['50%', '50%'],
+                    roseType: 'area', // 面积模式体现数量
+                    itemStyle: { borderRadius: 5 },
+                    data: data.map(d => ({
+                        value: d.occurrence_count,
+                        name: d.pitfall_name
+                    })).sort((a, b) => b.value - a.value)
+                }]
+            });
+        } catch (error) {
+            console.error("Failed to load pitfalls:", error);
+        }
     }
-
     // --- 4. Solvability ---
     async function loadSolvability() {
         const res = await axios.get('/api/solvability');
-        const s = res.data.find(d => d.status === 'Solvable');
-        const h = res.data.find(d => d.status === 'Hard-to-Solve');
+        const s = res.data.find(d => d.status === 'Solvable') || {avg_owner_reputation:0, avg_body_length:0, avg_score:0, avg_view_count:0, avg_answer_count:0, code_snippet_ratio:0, complex_topic_ratio:0};
+        const h = res.data.find(d => d.status === 'Hard-to-Solve') || {avg_owner_reputation:0, avg_body_length:0, avg_score:0, avg_view_count:0, avg_answer_count:0, code_snippet_ratio:0, complex_topic_ratio:0};
 
-        // Radar Chart for multi-dimensional comparison
-        echarts.init(document.getElementById('solvRadar')).setOption({
+        // --- Radar Chart Logic with dynamic boundary protection ---
+        const metrics = [
+            { key: 'avg_owner_reputation', label: 'Owner Rep' },
+            { key: 'avg_body_length', label: 'Body Length' },
+            { key: 'avg_score', label: 'Score' },
+            { key: 'avg_view_count', label: 'Views' },
+            { key: 'avg_answer_count', label: 'Answer Count' }
+        ];
+
+        // 动态计算每个维度的最大值 (取两组数据的最大值并加 20% 边距，防止贴边)
+        const indicators = metrics.map(m => {
+            const maxVal = Math.max(s[m.key], h[m.key]);
+            return {
+                name: m.label,
+                max: maxVal === 0 ? 100 : Math.ceil(maxVal * 1.2)
+            };
+        });
+
+        const solvRadar = echarts.init(document.getElementById('solvRadar'));
+        solvRadar.setOption({
+            tooltip: { trigger: 'item' },
             legend: { data: ['Solvable', 'Hard-to-Solve'], bottom: 0 },
             radar: {
-                indicator: [
-                    { name: 'Owner Rep', max: 3000 },
-                    { name: 'Body Length', max: 1500 },
-                    { name: 'Score', max: 10 },
-                    { name: 'Views', max: 5000 },
-                    { name: 'Answer Count', max: 5 }
-                ]
+                indicator: indicators,
+                radius: '65%', // 缩小半径确保文字不超出
+                axisName: { color: '#333', backgroundColor: '#eee', borderRadius: 3, padding: [3, 5] }
             },
             series: [{
                 type: 'radar',
+                emphasis: { lineStyle: { width: 4 } },
                 data: [
-                    { value: [s.avg_owner_reputation, s.avg_body_length, s.avg_score, s.avg_view_count, s.avg_answer_count], name: 'Solvable' },
-                    { value: [h.avg_owner_reputation, h.avg_body_length, h.avg_score, h.avg_view_count, h.avg_answer_count], name: 'Hard-to-Solve' }
+                    {
+                        value: metrics.map(m => s[m.key]),
+                        name: 'Solvable',
+                        areaStyle: { opacity: 0.3 }
+                    },
+                    {
+                        value: metrics.map(m => h[m.key]),
+                        name: 'Hard-to-Solve',
+                        areaStyle: { opacity: 0.3 }
+                    }
                 ]
             }]
         });
@@ -227,11 +403,12 @@
         // Bar Chart for Ratio-based metrics
         echarts.init(document.getElementById('solvCodeBar')).setOption({
             tooltip: { trigger: 'axis' },
+            legend: { data: ['Solvable', 'Hard-to-Solve'] },
             xAxis: { type: 'category', data: ['Code Snippet %', 'Complex Topic %'] },
             yAxis: { type: 'value', max: 100 },
             series: [
-                { name: 'Solvable', type: 'bar', data: [s.code_snippet_ratio, s.complex_topic_ratio] },
-                { name: 'Hard-to-Solve', type: 'bar', data: [h.code_snippet_ratio, h.complex_topic_ratio] }
+                { name: 'Solvable', type: 'bar', data: [s.code_snippet_ratio, s.complex_topic_ratio], itemStyle: {color: '#4776e6'} },
+                { name: 'Hard-to-Solve', type: 'bar', data: [h.code_snippet_ratio, h.complex_topic_ratio], itemStyle: {color: '#ff6b6b'} }
             ]
         });
     }
