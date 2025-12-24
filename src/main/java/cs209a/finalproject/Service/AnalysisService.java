@@ -21,7 +21,7 @@ public class AnalysisService {
     @Autowired
     private JdbcTemplate jdbcTemplate;
 
-    // 1. Topic Trends: 过去3年指定标签的月度提问量趋势
+    // 1. Topic Trends
     public List<Map<String, Object>> getTopicTrends(String startDate, String endDate, List<String> tags) {
         if (CollectionUtils.isEmpty(tags)) {
             throw new IllegalArgumentException("分析标签列表不能为空，请至少指定一个标签");
@@ -130,13 +130,12 @@ public class AnalysisService {
         PITFALL_RULES.put("Spurious Wakeup", Arrays.asList("spurious", "wakeup", "spurious wakeup"));
     }
 
-    // ========== 步骤1：自动挖掘多线程问题的高频候选关键词（核心修复） ==========
+    // ========== 步骤1：自动挖掘多线程问题的高频候选关键词 ==========
     private List<Map.Entry<String, Long>> getHighFreqKeywords(int topN, int minOccurrence) {
         if (topN <= 0 || minOccurrence < 0) {
             throw new IllegalArgumentException("topN必须>0，minOccurrence必须>=0");
         }
 
-        // 核心优化：
         // 1. 拆分正则改为[^a-zA-Z-]+，保留连字符（如race-condition）
         // 2. 处理HTML转义字符（&#39;）
         // 3. 扩大标签范围（加入java），确保数据量
@@ -147,8 +146,8 @@ public class AnalysisService {
                 count(DISTINCT word_table.question_id) AS occurrence_count
             FROM (
                 -- Split title with HTML escape handling
-                SELECT 
-                    q.question_id, 
+                SELECT
+                    q.question_id,
                     regexp_split_to_table(
                         regexp_replace(q.title, '&#39;', '''', 'g'),
                         '[^a-zA-Z-]+'  -- 仅拆分非字母/非连字符，保留复合关键词
@@ -166,7 +165,7 @@ public class AnalysisService {
                     ) AS word
                 FROM questions q
                 JOIN question_tags qt ON q.question_id = qt.question_id
-                WHERE qt.tag IN ('multithreading', 'concurrency', 'java')
+                WHERE qt.tag IN ('multithreading', 'concurrency')
             ) AS word_table
             WHERE
                 word != ''
@@ -205,9 +204,8 @@ public class AnalysisService {
 
     // ========== 步骤2：结合高频词+规则映射，生成多线程陷阱分析结果 ==========
     public List<Map<String, Object>> getMultithreadingPitfalls() {
-        // 调整默认参数：降低阈值以适配测试数据，开启手动补充提升结果覆盖度
         int topN = 50;
-        int minOccurrence = 1;  // 测试阶段降低阈值，生产可改回5
+        int minOccurrence = 5;
         boolean includeManual = true;
 
         List<Map.Entry<String, Long>> highFreqKeywords = getHighFreqKeywords(topN, minOccurrence);
@@ -228,7 +226,6 @@ public class AnalysisService {
                 // 匹配逻辑：关键词包含规则词，或规则词（复合）包含关键词
                 boolean isMatch = ruleKeywords.stream().anyMatch(ruleWord -> {
                     String ruleWordLower = ruleWord.toLowerCase();
-                    // 处理复合规则词（如"race condition"）
                     if (ruleWordLower.contains(" ")) {
                         String[] ruleParts = ruleWordLower.split(" ");
                         return Arrays.stream(ruleParts).allMatch(keyword::contains);
@@ -245,7 +242,6 @@ public class AnalysisService {
             }
         }
 
-        // 手动补充：通过正则匹配复合关键词（如"race condition"），提升结果准确性
         if (includeManual) {
             for (Map.Entry<String, List<String>> ruleEntry : PITFALL_RULES.entrySet()) {
                 String pitfall = ruleEntry.getKey();
@@ -297,47 +293,71 @@ public class AnalysisService {
     // 4. Solvability: 比较可解与难解问题的特征指标
     public List<Map<String, Object>> getSolvabilityComparison() {
         String sql = """
-        WITH question_status_cte AS (
-            SELECT
-                q.*,
-                u.reputation,
-                CASE
-                    WHEN q.accepted_answer_id IS NOT NULL
-                         AND q.is_answered = TRUE
-                         AND q.answer_count >= 1
-                         THEN 'Solvable'
-                    WHEN q.accepted_answer_id IS NULL
-                         AND q.answer_count = 0
-                         AND EXTRACT(DAY FROM NOW() - to_timestamp(q.creation_date)) > 30
-                         THEN 'Hard-to-Solve'
-                    ELSE 'Other'
-                END as status
-            FROM questions q
-            JOIN users u ON q.owner_user_id = u.user_id
-        )
+    WITH question_code_length AS (
         SELECT
-            status,
-            ROUND(AVG(reputation), 2) as avg_owner_reputation,
-            ROUND(AVG(LENGTH(body)), 0) as avg_body_length,
-            ROUND(SUM(CASE WHEN body LIKE '%<code>%' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as code_snippet_ratio,
-            ROUND(AVG(answer_count), 2) as avg_answer_count,
-            ROUND(AVG(score), 2) as avg_score,
-            ROUND(AVG((SELECT COUNT(*) FROM question_tags qt WHERE qt.question_id = question_status_cte.question_id)), 2) as avg_tag_count,
-            ROUND(AVG(view_count), 2) as avg_view_count,
-            ROUND(SUM(CASE WHEN EXISTS (
-                SELECT 1 FROM question_tags qt
-                WHERE qt.question_id = question_status_cte.question_id
-                AND qt.tag IN ('multithreading', 'reflection', 'spring-boot')
-            ) THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as complex_topic_ratio,
-            COUNT(*) as total_questions
-        FROM question_status_cte
-        WHERE status IN ('Solvable', 'Hard-to-Solve')
-        GROUP BY status
-        """;
+            q.question_id,
+            q.body,
+            q.creation_date,
+            q.is_answered,
+            q.answer_count,
+            q.score,
+            q.view_count,
+            q.owner_user_id,
+            q.accepted_answer_id,
+            COALESCE(LENGTH(q.body), 1) AS body_total_length,
+            COALESCE(SUM(LENGTH(code_content)), 0) AS code_total_length
+        FROM questions q
+        LEFT JOIN LATERAL (
+            SELECT regexp_matches(q.body, '<code>(.*?)</code>', 'g') AS code_content_arr
+        ) AS code_matches ON TRUE
+        LEFT JOIN LATERAL (
+            SELECT unnest(code_matches.code_content_arr) AS code_content
+        ) AS code_content ON TRUE
+        GROUP BY q.question_id, q.body, q.creation_date, q.is_answered, q.answer_count, 
+                 q.score, q.view_count, q.owner_user_id, q.accepted_answer_id
+    ),
+    question_status_cte AS (
+        SELECT
+            qcl.*,
+            u.reputation,
+            CASE
+                WHEN qcl.accepted_answer_id IS NOT NULL
+                     AND qcl.is_answered = TRUE
+                     AND qcl.answer_count >= 1
+                     THEN 'Solvable'
+                WHEN qcl.accepted_answer_id IS NULL
+                     AND qcl.answer_count = 0
+                     AND EXTRACT(DAY FROM NOW() - to_timestamp(qcl.creation_date)) > 30
+                     THEN 'Hard-to-Solve'
+                ELSE 'Other'
+            END as status
+        FROM question_code_length qcl
+        JOIN users u ON qcl.owner_user_id = u.user_id
+    )
+    SELECT
+        status,
+        ROUND(AVG(reputation)::NUMERIC, 2) as avg_owner_reputation,
+        ROUND(AVG(body_total_length)::NUMERIC, 0) as avg_body_length,
+        ROUND(AVG(((code_total_length::FLOAT / body_total_length) * 100)::NUMERIC), 2) as code_snippet_ratio,
+        ROUND(AVG(answer_count)::NUMERIC, 2) as avg_answer_count,
+        ROUND(AVG(score)::NUMERIC, 2) as avg_score,
+        ROUND(AVG((SELECT COUNT(*) FROM question_tags qt WHERE qt.question_id = question_status_cte.question_id))::NUMERIC, 2) as avg_tag_count,
+        ROUND(AVG(view_count)::NUMERIC, 2) as avg_view_count,
+        ROUND((SUM(CASE WHEN EXISTS (
+            SELECT 1 FROM question_tags qt
+            WHERE qt.question_id = question_status_cte.question_id
+            AND qt.tag IN ('multithreading', 'reflection', 'spring-boot')
+        ) THEN 1 ELSE 0 END) * 100.0 / COUNT(*))::NUMERIC, 2) as complex_topic_ratio,
+        COUNT(*) as total_questions
+    FROM question_status_cte
+    WHERE status IN ('Solvable', 'Hard-to-Solve')
+    GROUP BY status
+    ORDER BY status;
+    """;
         try {
             return jdbcTemplate.queryForList(sql);
         } catch (EmptyResultDataAccessException e) {
-            log.warn("SolvabilityComparison查询无结果");
+            log.warn("SolvabilityComparison 查询无结果");
             return new ArrayList<>();
         }
     }
